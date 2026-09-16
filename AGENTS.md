@@ -4,6 +4,19 @@
 - The default branch in this repo is `dev`.
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 
+## Local Release Build
+
+- When asked to build a local release of the OpenCode CLI, set `OPENCODE_CHANNEL=latest` explicitly instead of using the Git branch as the channel.
+- Read the version from `packages/opencode/package.json` and pass it explicitly as `OPENCODE_VERSION`.
+- Run from the repository root, replacing `<version>` with that version:
+  ```sh
+  OPENCODE_CHANNEL=latest OPENCODE_VERSION=<version> bun run --cwd packages/opencode build --single
+  ```
+- Keep the embedded web UI enabled; do not use `--skip-embed-web-ui` for a normal local release build.
+- Leave `OPENCODE_RELEASE` unset. It enables publishing artifacts to GitHub Releases and is not needed for a local release build.
+- The `--single` flag builds for the current OS and architecture. On macOS ARM64, the output is `packages/opencode/dist/opencode-darwin-arm64/bin/opencode`.
+- Verify the resulting binary with `--version` and `db path`. With no database path overrides, the `latest` channel uses `opencode.db`, not a channel-specific database such as `opencode-dev.db`.
+
 ## Branch Names
 
 Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.
