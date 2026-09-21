@@ -2522,6 +2522,17 @@ export type ProviderAuthMethod = {
   >
 }
 
+export type ProviderUsageWindow = {
+  name: string
+  remainingPercent: number
+  resetsAt: number
+}
+
+export type ProviderUsage = {
+  status: "available" | "unavailable" | "unsupported"
+  windows: Array<ProviderUsageWindow>
+}
+
 export type ProviderAuthAuthorization = {
   url: string
   method: "auto" | "code"
@@ -9364,6 +9375,36 @@ export type ProviderAuthResponses = {
 }
 
 export type ProviderAuthResponse = ProviderAuthResponses[keyof ProviderAuthResponses]
+
+export type ProviderUsageData = {
+  body?: never
+  path: {
+    providerID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/{providerID}/usage"
+}
+
+export type ProviderUsageErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ProviderUsageError = ProviderUsageErrors[keyof ProviderUsageErrors]
+
+export type ProviderUsageResponses = {
+  /**
+   * Subscription usage limits
+   */
+  200: ProviderUsage
+}
+
+export type ProviderUsageResponse = ProviderUsageResponses[keyof ProviderUsageResponses]
 
 export type ProviderOauthAuthorizeData = {
   body?: {

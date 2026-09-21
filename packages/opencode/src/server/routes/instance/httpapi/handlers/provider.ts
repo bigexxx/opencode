@@ -2,6 +2,7 @@ import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
+import { ProviderUsage } from "@/provider/usage"
 import { Auth } from "@/auth"
 
 import { mapValues } from "remeda"
@@ -110,6 +111,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     return handlers
       .handle("list", list)
       .handle("auth", auth)
+      .handle("usage", (ctx) => ProviderUsage.read(authStore, provider, ctx.params.providerID))
       .handleRaw("authorize", authorizeRaw)
       .handle("callback", callback)
   }),

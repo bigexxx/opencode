@@ -561,7 +561,7 @@
     },
     "packages/opencode": {
       "name": "opencode",
-      "version": "1.18.31",
+      "version": "1.18.31-bigexxx-1",
       "bin": {
         "opencode": "./bin/opencode",
       },
