@@ -6,6 +6,12 @@ import { Usage } from "./usage"
 
 const id = "internal:sidebar-context"
 
+function formatRate(value: number | null, label: string, turns = 10) {
+  if (value == null) return ""
+  const suffix = turns < 10 ? ` (${turns})` : ""
+  return `${label} ${value.toFixed(1)} tok/s${suffix}`
+}
+
 function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
   const msg = createMemo(() => props.api.state.session.messages(props.session_id))
@@ -47,19 +53,16 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     }
   })
 
-  const info = state()
   return (
     <box>
       <text fg={theme().text}>
         <b>Context</b>
       </text>
-      <text fg={theme().textMuted}>{info.tokens.toLocaleString()} tokens</text>
-      <text fg={theme().textMuted}>{info.percent ?? 0}% used</text>
-      {info.lastSpeed != null && <text fg={theme().textMuted}>last {info.lastSpeed.toFixed(1)} tok/s</text>}
-      {info.avgSpeed != null && (
-        <text fg={theme().textMuted}>
-          {`avg ${info.avgSpeed.toFixed(1)} tok/s${info.turns < 10 ? ` (${info.turns})` : ""}`}
-        </text>
+      <text fg={theme().textMuted}>{state().tokens.toLocaleString()} tokens</text>
+      <text fg={theme().textMuted}>{state().percent ?? 0}% used</text>
+      {state().lastSpeed != null && <text fg={theme().textMuted}>{formatRate(state().lastSpeed, "last")}</text>}
+      {state().avgSpeed != null && (
+        <text fg={theme().textMuted}>{formatRate(state().avgSpeed, "avg", state().turns)}</text>
       )}
       <Usage api={props.api} cost={session()?.cost ?? 0} />
     </box>
