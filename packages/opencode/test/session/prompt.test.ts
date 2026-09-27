@@ -50,7 +50,7 @@ import { Truncate } from "@/tool/truncate"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Format } from "../../src/format"
-import { TestInstance } from "../fixture/fixture"
+import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -109,14 +109,14 @@ function errorTool(parts: SessionV1.Part[]) {
   return part?.state.status === "error" ? (part as ErrorToolPart) : undefined
 }
 
-function makeMcp(instructions: MCP.ServerInstructions[] = []) {
+function makeMcp(instructions: MCP.ServerInstructions[] = [], tools: Record<string, MCP.McpTool> = {}) {
   return Layer.succeed(
     MCP.Service,
     MCP.Service.of({
       status: () => Effect.succeed({}),
       clients: () => Effect.succeed({}),
       instructions: () => Effect.succeed(instructions),
-      tools: () => Effect.succeed({}),
+      tools: () => Effect.succeed(tools),
       prompts: () => Effect.succeed({}),
       resources: () => Effect.succeed({}),
       resourceTemplates: () => Effect.succeed({}),
@@ -208,11 +208,15 @@ const promptRoot = LayerNode.group([
   RuntimeFlags.node,
 ])
 
-function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makePrompt(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  mcpTools?: Record<string, MCP.McpTool>
+  processor?: "blocking"
+}) {
   const replacements = [
     [SessionSummary.node, summary],
     [LSP.node, lsp],
-    [MCP.node, makeMcp(input?.mcpInstructions)],
+    [MCP.node, makeMcp(input?.mcpInstructions, input?.mcpTools)],
     [RuntimeFlags.node, runtimeFlags],
   ] as const
   if (input?.processor === "blocking") {
@@ -221,12 +225,16 @@ function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; proces
   return LayerNode.compile(promptRoot, replacements)
 }
 
-function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makeHttp(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  mcpTools?: Record<string, MCP.McpTool>
+  processor?: "blocking"
+}) {
   const root = LayerNode.group([promptRoot, testLLMServerNode])
   const replacements = [
     [SessionSummary.node, summary],
     [LSP.node, lsp],
-    [MCP.node, makeMcp(input?.mcpInstructions)],
+    [MCP.node, makeMcp(input?.mcpInstructions, input?.mcpTools)],
     [RuntimeFlags.node, runtimeFlags],
   ] as const
   if (input?.processor === "blocking") {
@@ -235,7 +243,11 @@ function makeHttp(input?: { mcpInstructions?: MCP.ServerInstructions[]; processo
   return LayerNode.compile(root, replacements)
 }
 
-function makeHttpNoLLMServer(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
+function makeHttpNoLLMServer(input?: {
+  mcpInstructions?: MCP.ServerInstructions[]
+  mcpTools?: Record<string, MCP.McpTool>
+  processor?: "blocking"
+}) {
   return makePrompt(input)
 }
 
@@ -551,6 +563,85 @@ it.instance("loop calls LLM and returns assistant message", () =>
     const parts = result.parts.filter((p) => p.type === "text")
     expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
     expect(yield* llm.hits).toHaveLength(1)
+    const finish = (yield* MessageV2.parts(result.info.id)).find((part) => part.type === "step-finish")
+    expect(finish?.type).toBe("step-finish")
+    if (finish?.type !== "step-finish") return
+    expect(Object.keys(finish.context ?? {}).toSorted()).toEqual(
+      ["agent", "global", "project", "system", "tools", "history", "mcp"].toSorted(),
+    )
+    expect((finish.context?.tools ?? 0) > 0).toBe(true)
+    expect((finish.context?.history ?? 0) > 0).toBe(true)
+  }),
+)
+
+it.instance("reports separate estimates for global and project instructions", () =>
+  Effect.gen(function* () {
+    const global = yield* tmpdirScoped()
+    yield* writeText(path.join(global, "AGENTS.md"), "Global instructions ".repeat(20))
+    const { dir, llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      instructions: [path.join(global, "AGENTS.md")],
+    }))
+    yield* writeText(path.join(dir, "AGENTS.md"), "Project instructions ".repeat(20))
+    const prompt = yield* SessionPrompt.Service
+    const session = yield* Session.Service
+    const chat = yield* session.create({ title: "Pinned" })
+    yield* llm.text("done")
+
+    const result = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      parts: [{ type: "text", text: "hello" }],
+    })
+    const finish = result.parts.find((part) => part.type === "step-finish")
+    expect(finish?.type).toBe("step-finish")
+    if (finish?.type !== "step-finish") return
+    expect((finish.context?.global ?? 0) > 0).toBe(true)
+    expect((finish.context?.project ?? 0) > 0).toBe(true)
+  }),
+)
+
+const withMcpTools = testEffect(
+  makeHttp({
+    mcpTools: Object.fromEntries(
+      ["docs", "metrics"].map((server) => [
+        `${server}_lookup`,
+        {
+          server,
+          def: {
+            name: "lookup",
+            description: `${server} lookup`,
+            inputSchema: { type: "object", properties: { query: { type: "string" } } },
+          },
+          client: {} as MCP.McpTool["client"],
+        },
+      ]),
+    ),
+  }),
+)
+
+withMcpTools.instance("attributes MCP tool schema estimates to their servers", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const session = yield* Session.Service
+    const chat = yield* session.create({ title: "Pinned" })
+    yield* llm.text("done")
+
+    const result = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      parts: [{ type: "text", text: "hello" }],
+    })
+    const finish = result.parts.find((part) => part.type === "step-finish")
+    expect(finish?.type).toBe("step-finish")
+    if (finish?.type !== "step-finish") return
+    expect(Object.keys(finish.context?.mcp ?? {}).toSorted()).toEqual(["docs", "metrics"])
+    expect((finish.context?.mcp?.docs ?? 0) > 0).toBe(true)
+    expect((finish.context?.mcp?.metrics ?? 0) > 0).toBe(true)
+    expect((finish.context?.mcp?.docs ?? 0) + (finish.context?.mcp?.metrics ?? 0) <= (finish.context?.tools ?? 0)).toBe(
+      true,
+    )
   }),
 )
 

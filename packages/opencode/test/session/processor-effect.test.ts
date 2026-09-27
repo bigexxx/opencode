@@ -268,6 +268,7 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
           sessionID: chat.id,
           model: mdl,
           agent: agent(),
+          context: { agent: 10, global: 20, project: 30, system: 40, tools: 50, history: 60 },
           system: [],
           messages: [{ role: "user", content: "hi" }],
           tools: {},
@@ -280,6 +281,9 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
         expect(value).toBe("continue")
         expect(calls).toBe(1)
         expect(parts.some((part) => part.type === "text" && part.text === "hello")).toBe(true)
+        expect(parts.find((part) => part.type === "step-finish")).toMatchObject({
+          context: { agent: 10, global: 20, project: 30, system: 40, tools: 50, history: 60 },
+        })
       }),
     { config: (url) => providerCfg(url) },
   ),

@@ -560,6 +560,17 @@ export type StepFinishPart = {
   reason: string
   snapshot?: string
   cost: number
+  context?: {
+    agent: number
+    global: number
+    project: number
+    system: number
+    tools: number
+    history: number
+    mcp?: {
+      [key: string]: number
+    }
+  }
   tokens: {
     total?: number
     input: number

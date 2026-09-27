@@ -243,6 +243,17 @@ export const StepFinishPart = Schema.Struct({
   reason: Schema.String,
   snapshot: Schema.optional(Schema.String),
   cost: Schema.Finite,
+  context: optional(
+    Schema.Struct({
+      agent: Schema.Finite,
+      global: Schema.Finite,
+      project: Schema.Finite,
+      system: Schema.Finite,
+      tools: Schema.Finite,
+      history: Schema.Finite,
+      mcp: optional(Schema.Record(Schema.String, Schema.Finite)),
+    }),
+  ),
   tokens: Schema.Struct({
     total: Schema.optional(Schema.Finite),
     input: Schema.Finite,

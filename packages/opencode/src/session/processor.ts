@@ -65,6 +65,7 @@ type ToolCall = {
 }
 
 interface ProcessorContext extends Input {
+  context?: SessionV1.StepFinishPart["context"]
   toolcalls: Record<string, ToolCall>
   shouldBreak: boolean
   snapshot: string | undefined
@@ -466,6 +467,7 @@ const layer = Layer.effect(
               type: "step-finish",
               tokens: usage.tokens,
               cost: usage.cost,
+              context: ctx.context,
             })
             yield* session.updateMessage(ctx.assistantMessage)
             if (ctx.snapshot) {
@@ -644,6 +646,7 @@ const layer = Layer.effect(
           messageID: input.assistantMessage.id,
         })
         ctx.needsCompaction = false
+        ctx.context = streamInput.context
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {

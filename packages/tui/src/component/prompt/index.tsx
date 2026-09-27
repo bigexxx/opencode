@@ -275,11 +275,19 @@ export function Prompt(props: PromptProps) {
     const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
     const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
     const cost = session?.cost ?? 0
+    const breakdown = (sync.data.part[last.id] ?? []).findLast((part) => part.type === "step-finish" && part.context)
     return {
       context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
       cost: cost > 0 ? money.format(cost) : undefined,
+      breakdown: breakdown?.type === "step-finish" ? breakdown.context : undefined,
+      input: last.tokens.input + last.tokens.cache.read + last.tokens.cache.write,
+      output: last.tokens.output + last.tokens.reasoning,
+      total: tokens,
+      limit: model?.limit.context,
     }
   })
+
+  const [showContextDetails, setShowContextDetails] = createSignal(true)
 
   const [store, setStore] = createStore<{
     prompt: PromptInfo
@@ -303,6 +311,7 @@ export function Prompt(props: PromptProps) {
       () => props.sessionID,
       () => {
         setStore("placeholder", randomIndex(list().length))
+        setShowContextDetails(true)
       },
       { defer: true },
     ),
@@ -1510,6 +1519,30 @@ export function Prompt(props: PromptProps) {
             }
           />
         </box>
+        <Show when={store.mode === "normal" && showContextDetails() && usage()?.breakdown}>
+          {(breakdown) => (
+            <box paddingLeft={1} paddingBottom={1} flexShrink={0}>
+              <text fg={theme.textMuted}>
+                ≈ Agent {breakdown().agent.toLocaleString()} · Global instructions {breakdown().global.toLocaleString()}{" "}
+                · Project instructions {breakdown().project.toLocaleString()}
+              </text>
+              <text fg={theme.textMuted}>
+                ≈ Tools {breakdown().tools.toLocaleString()} · History + prompt {breakdown().history.toLocaleString()} ·{" "}
+                Other system {breakdown().system.toLocaleString()}
+              </text>
+              <text fg={theme.textMuted}>
+                ≈ Input breakdown{" "}
+                {Object.values(breakdown())
+                  .reduce<number>((sum, value) => sum + (typeof value === "number" ? value : 0), 0)
+                  .toLocaleString()}{" "}
+                · Provider input {usage()?.input.toLocaleString()} + output {usage()?.output.toLocaleString()} ={" "}
+                {usage()?.total.toLocaleString()}
+                {usage()?.limit ? ` / ${usage()?.limit?.toLocaleString()}` : ""} tokens
+              </text>
+              <text fg={theme.textMuted}>≈ categories estimated from request size; provider totals may differ.</text>
+            </box>
+          )}
+        </Show>
         <box width="100%" flexDirection="row" justifyContent="space-between">
           <Switch>
             <Match when={status().type !== "idle"}>
@@ -1664,9 +1697,17 @@ export function Prompt(props: PromptProps) {
                   <Switch>
                     <Match when={usage()}>
                       {(item) => (
-                        <text fg={theme.textMuted} wrapMode="none">
-                          {[item().context, item().cost].filter(Boolean).join(" · ")}
-                        </text>
+                        <box onMouseUp={() => setShowContextDetails((value) => !value)}>
+                          <text fg={theme.textMuted} wrapMode="none">
+                            {[
+                              item().context,
+                              item().cost,
+                              item().breakdown ? (showContextDetails() ? "▴ details" : "▾ details") : undefined,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </text>
+                        </box>
                       )}
                     </Match>
                     <Match when={true}>

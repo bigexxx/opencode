@@ -10,7 +10,7 @@ import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { Provider } from "@/provider/provider"
 
-import { type Tool as AITool, tool, jsonSchema } from "ai"
+import { type Tool as AITool, tool, jsonSchema, asSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
@@ -56,6 +56,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { Token } from "@/util/token"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1269,9 +1270,55 @@ const layer = Layer.effect(
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            const projectInstructions = instructions.filter((text) => {
+              const source = text.split("\n", 1)[0]?.replace("Instructions from: ", "") ?? ""
+              const relative = path.relative(ctx.project.vcs === "git" ? ctx.worktree : ctx.directory, source)
+              return (
+                path.isAbsolute(source) &&
+                relative !== ".." &&
+                !relative.startsWith(`..${path.sep}`) &&
+                !path.isAbsolute(relative)
+              )
+            })
+            const toolSizes = yield* Effect.forEach(Object.entries(tools), ([name, item]) =>
+              Effect.promise(async () =>
+                Token.estimate(
+                  JSON.stringify({
+                    name,
+                    description: item.description,
+                    schema: await asSchema(item.inputSchema).jsonSchema,
+                  }),
+                ),
+              ),
+            )
+            const mcpTools = yield* mcp.tools()
+            const mcpSizes = Object.keys(tools).reduce<Record<string, number>>((sizes, name, index) => {
+              const server = mcpTools[name]?.server
+              if (server) sizes[server] = (sizes[server] ?? 0) + toolSizes[index]!
+              return sizes
+            }, {})
+            const context = {
+              agent: Token.estimate(agent.prompt || SystemPrompt.provider(model).join("\n")),
+              global: Token.estimate(instructions.filter((text) => !projectInstructions.includes(text)).join("\n")),
+              project: Token.estimate(projectInstructions.join("\n")),
+              system: Token.estimate(
+                [
+                  ...env,
+                  ...(mcpInstructions ? [mcpInstructions] : []),
+                  ...(skills ? [skills] : []),
+                  ...(lastUser.system ? [lastUser.system] : []),
+                  ...(format.type === "json_schema" ? [STRUCTURED_OUTPUT_SYSTEM_PROMPT] : []),
+                  ...(isLastStep ? [MAX_STEPS_PROMPT] : []),
+                ].join("\n"),
+              ),
+              tools: toolSizes.reduce((total, size) => total + size, 0),
+              history: Token.estimate(JSON.stringify(modelMsgs)),
+              mcp: mcpSizes,
+            }
             const result = yield* handle.process({
               user: lastUser,
               agent,
+              context,
               permission: session.permission,
               sessionID,
               parentSessionID: session.parentID,

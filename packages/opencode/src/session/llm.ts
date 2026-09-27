@@ -38,6 +38,7 @@ export type StreamInput = {
   parentSessionID?: string
   model: Provider.Model
   agent: Agent.Info
+  context?: SessionV1.StepFinishPart["context"]
   permission?: PermissionV1.Ruleset
   system: string[]
   messages: ModelMessage[]

@@ -1,13 +1,22 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
+import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import { createMemo, For, Match, Show, Switch, createSignal } from "solid-js"
 
 const id = "internal:sidebar-mcp"
 
-function View(props: { api: TuiPluginApi }) {
+function View(props: { api: TuiPluginApi; sessionID: string }) {
   const [open, setOpen] = createSignal(true)
   const theme = () => props.api.theme.current
   const list = createMemo(() => props.api.state.mcp())
+  const tokens = createMemo(() => {
+    const last = props.api.state.session
+      .messages(props.sessionID)
+      .findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
+    if (!last) return
+    const finish = props.api.state.part(last.id).findLast((part) => part.type === "step-finish" && part.context?.mcp)
+    return finish?.type === "step-finish" ? finish.context?.mcp : undefined
+  })
   const on = createMemo(() => list().filter((item) => item.status === "connected").length)
   const bad = createMemo(
     () =>
@@ -67,6 +76,9 @@ function View(props: { api: TuiPluginApi }) {
                       <Match when={item.status === "needs_auth"}>Needs auth</Match>
                       <Match when={item.status === "needs_client_registration"}>Needs client ID</Match>
                     </Switch>
+                    <Show when={item.status === "connected" ? tokens()?.[item.name] : undefined}>
+                      {(size) => <> (≈{size().toLocaleString()} tok.)</>}
+                    </Show>
                   </span>
                 </text>
               </box>
@@ -82,8 +94,8 @@ const tui: TuiPlugin = async (api) => {
   api.slots.register({
     order: 200,
     slots: {
-      sidebar_content() {
-        return <View api={api} />
+      sidebar_content(_ctx, props) {
+        return <View api={api} sessionID={props.session_id} />
       },
     },
   })
