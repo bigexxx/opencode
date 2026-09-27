@@ -217,9 +217,9 @@ function processorLayer(result: "continue" | "compact") {
   )
 }
 
-function cfg(compaction?: ConfigV1.Info["compaction"]) {
+function cfg(compaction?: ConfigV1.Info["compaction"], agent?: ConfigV1.Info["agent"]) {
   const base = Schema.decodeUnknownSync(ConfigV1.Info)({}) as ConfigV1.Info
-  return Layer.succeed(Config.Service, TestConfig.make({ get: () => Effect.succeed({ ...base, compaction }) }))
+  return Layer.succeed(Config.Service, TestConfig.make({ get: () => Effect.succeed({ ...base, compaction, agent }) }))
 }
 
 const defaultProvider = wide()
@@ -812,6 +812,86 @@ describe("session.compaction.prune", () => {
 })
 
 describe("session.compaction.process", () => {
+  itCompaction.instance(
+    "uses the compaction agent's variant instead of the session variant",
+    () => {
+      const stub = llm()
+      let variant: string | undefined
+      stub.push(reply("summary", (input) => (variant = input.user.model.variant)))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const msg = yield* createUserMessage(session.id, "hello")
+        yield* ssn.updateMessage({ ...msg, model: { ...msg.model, variant: "high" } })
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+
+        yield* SessionCompaction.use.process({ parentID: msg.id, messages: msgs, sessionID: session.id, auto: false })
+
+        const summary = (yield* ssn.messages({ sessionID: session.id })).find(
+          (item) => item.info.role === "assistant" && item.info.summary,
+        )
+        expect(variant).toBe("low")
+        expect(summary?.info.role === "assistant" && summary.info.variant).toBe("low")
+        expect((yield* ssn.messages({ sessionID: session.id }))[0]?.info).toMatchObject({
+          model: { variant: "high" },
+        })
+      }).pipe(
+        withCompaction({
+          llm: stub.llmLayer,
+          config: cfg(undefined, { compaction: { model: "test/test-model", variant: "low" } }),
+        }),
+      )
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "does not carry the session variant into a different compaction model",
+    () => {
+      const stub = llm()
+      let variant: string | undefined
+      stub.push(reply("summary", (input) => (variant = input.user.model.variant)))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const msg = yield* createUserMessage(session.id, "hello")
+        yield* ssn.updateMessage({
+          ...msg,
+          model: { ...msg.model, modelID: ModelV2.ID.make("session-model"), variant: "high" },
+        })
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+
+        yield* SessionCompaction.use.process({ parentID: msg.id, messages: msgs, sessionID: session.id, auto: false })
+
+        expect(variant).toBeUndefined()
+      }).pipe(
+        withCompaction({ llm: stub.llmLayer, config: cfg(undefined, { compaction: { model: "test/test-model" } }) }),
+      )
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "preserves the session variant when using the same model without a configured variant",
+    () => {
+      const stub = llm()
+      let variant: string | undefined
+      stub.push(reply("summary", (input) => (variant = input.user.model.variant)))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const msg = yield* createUserMessage(session.id, "hello")
+        yield* ssn.updateMessage({ ...msg, model: { ...msg.model, variant: "high" } })
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+
+        yield* SessionCompaction.use.process({ parentID: msg.id, messages: msgs, sessionID: session.id, auto: false })
+
+        expect(variant).toBe("high")
+      }).pipe(withCompaction({ llm: stub.llmLayer }))
+    },
+    { git: true },
+  )
+
   it.instance(
     "throws when parent is not a user message",
     Effect.gen(function* () {
