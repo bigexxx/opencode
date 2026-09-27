@@ -14,11 +14,14 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { Global } from "@opencode-ai/core/global"
+import { Hash } from "@opencode-ai/core/util/hash"
 import { Cause, Effect, Exit } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
 import { MCP } from "../../src/mcp/index"
 import { McpOAuthCallback } from "../../src/mcp/oauth-callback"
 import { TestInstance } from "../fixture/fixture"
+import { InstanceStore } from "../../src/project/instance-store"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
 const it = testEffect(LayerNode.compile(MCP.node))
@@ -398,6 +401,56 @@ it.instance("disabled server is marked disabled without opening a protocol sessi
     expect((yield* mcp.status())["disabled-server"]?.status).toBe("disabled")
     expect(server.state.requests).toEqual([])
   }),
+)
+
+it.instance(
+  "remembers MCP toggles after reloading the instance in both directions",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* MCP.Service
+      const test = yield* TestInstance
+      const store = yield* InstanceStore.Service
+      const file = path.join(Global.Path.state, "mcp", `${Hash.sha256(test.directory)}.json`)
+      yield* Effect.addFinalizer(() => Effect.promise(() => Bun.file(file).delete()).pipe(Effect.ignore))
+
+      expect((yield* mcp.status()).persisted?.status).toBe("disabled")
+      expect((yield* mcp.status()).other?.status).toBe("connected")
+      yield* mcp.connect("persisted")
+      expect((yield* mcp.status()).persisted?.status).toBe("connected")
+      yield* store.reload({ directory: test.directory })
+      expect((yield* mcp.status()).persisted?.status).toBe("connected")
+
+      yield* mcp.disconnect("persisted")
+      yield* store.reload({ directory: test.directory })
+      expect((yield* mcp.status()).persisted?.status).toBe("disabled")
+      expect((yield* mcp.status()).other?.status).toBe("connected")
+      expect(Object.keys(yield* mcp.tools())).toEqual(["other_current_directory"])
+    }),
+  {
+    config: {
+      mcp: {
+        persisted: { type: "local", command: [process.execPath, stdioFixture], enabled: false },
+        other: { type: "local", command: [process.execPath, stdioFixture] },
+      },
+    },
+  },
+)
+
+it.instance(
+  "keeps an enabled MCP disabled after reloading the instance",
+  () =>
+    Effect.gen(function* () {
+      const mcp = yield* MCP.Service
+      const test = yield* TestInstance
+      const file = path.join(Global.Path.state, "mcp", `${Hash.sha256(test.directory)}.json`)
+      yield* Effect.addFinalizer(() => Effect.promise(() => Bun.file(file).delete()).pipe(Effect.ignore))
+
+      expect((yield* mcp.status()).persisted?.status).toBe("connected")
+      yield* mcp.disconnect("persisted")
+      yield* (yield* InstanceStore.Service).reload({ directory: test.directory })
+      expect((yield* mcp.status()).persisted?.status).toBe("disabled")
+    }),
+  { config: { mcp: { persisted: { type: "local", command: [process.execPath, stdioFixture] } } } },
 )
 
 it.instance("returns prompts and URI-keyed resources from connected servers", () =>

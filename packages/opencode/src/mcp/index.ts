@@ -26,7 +26,7 @@ import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
-import { Cause, Effect, Exit, Layer, Context, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Layer, Context, Option, Schema, Stream } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
@@ -34,6 +34,9 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { McpCatalog } from "./catalog"
 import { McpEvent } from "@opencode-ai/schema/mcp-event"
 import { McpBrowser } from "./browser"
+import { Global } from "@opencode-ai/core/global"
+import { Hash } from "@opencode-ai/core/util/hash"
+import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 
 const DEFAULT_TIMEOUT = 30_000
 const CLIENT_OPTIONS = {
@@ -159,6 +162,7 @@ export interface McpTool {
   readonly def: MCPToolDef
   readonly client: MCPClient
   readonly timeout?: number
+  readonly server?: string
 }
 
 export interface Interface {
@@ -208,6 +212,27 @@ const layer = Layer.effect(
     const auth = yield* McpAuth.Service
     const events = yield* EventV2Bridge.Service
     const browser = yield* McpBrowser.Service
+    const fs = yield* FSUtil.Service
+    const flock = yield* EffectFlock.Service
+
+    const decodePreferences = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Boolean))
+    const preferenceFile = (directory: string) => path.join(Global.Path.state, "mcp", `${Hash.sha256(directory)}.json`)
+
+    const readPreferences = Effect.fn("MCP.readPreferences")(function* (file: string) {
+      return yield* fs.readJson(file).pipe(
+        Effect.map((value): Record<string, boolean> => Option.getOrElse(decodePreferences(value), () => ({}))),
+        Effect.catch(() => Effect.succeed<Record<string, boolean>>({})),
+      )
+    })
+
+    const setPreference = Effect.fn("MCP.setPreference")(function* (name: string, enabled: boolean) {
+      const file = preferenceFile(yield* InstanceState.directory)
+      yield* Effect.gen(function* () {
+        const preferences = yield* readPreferences(file)
+        yield* fs.ensureDir(path.dirname(file)).pipe(Effect.orDie)
+        yield* fs.writeJson(file, { ...preferences, [name]: enabled }).pipe(Effect.orDie)
+      }).pipe(flock.withLock(`mcp-preferences:${file}`), Effect.orDie)
+    })
 
     type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
 
@@ -494,6 +519,8 @@ const layer = Layer.effect(
         const cfg = yield* cfgSvc.get()
         const bridge = yield* EffectBridge.make()
         const config = cfg.mcp ?? {}
+        const file = preferenceFile(yield* InstanceState.directory)
+        const preferences = yield* readPreferences(file).pipe(flock.withLock(`mcp-preferences:${file}`), Effect.orDie)
         const s: State = {
           config: {},
           status: {},
@@ -511,12 +538,12 @@ const layer = Layer.effect(
                 return
               }
 
-              if (mcp.enabled === false) {
+              if ((preferences[key] ?? mcp.enabled) === false) {
                 s.status[key] = { status: "disabled" }
                 return
               }
 
-              const result = yield* create(key, mcp)
+              const result = yield* create(key, preferences[key] === true ? { ...mcp, enabled: true } : mcp)
               s.status[key] = result.status
               if (result.mcpClient) {
                 s.clients[key] = result.mcpClient
@@ -647,11 +674,13 @@ const layer = Layer.effect(
 
     const connect = Effect.fn("MCP.connect")(function* (name: string) {
       const mcp = yield* requireMcpConfig(name)
+      yield* setPreference(name, true)
       yield* createAndStore(name, { ...mcp, enabled: true })
     })
 
     const disconnect = Effect.fn("MCP.disconnect")(function* (name: string) {
       yield* requireMcpConfig(name)
+      yield* setPreference(name, false)
       const s = yield* InstanceState.get(state)
       yield* closeClient(s, name)
       delete s.clients[name]
@@ -681,7 +710,7 @@ const layer = Layer.effect(
         }
         const timeout = requestTimeout(s, clientName, mcpConfig, defaultTimeout)
         for (const def of listed) {
-          result[McpCatalog.toolName(clientName, def.name)] = { def, client, timeout }
+          result[McpCatalog.toolName(clientName, def.name)] = { def, client, timeout, server: clientName }
         }
       }
       return result
@@ -998,7 +1027,15 @@ export type AuthStatus = "authenticated" | "expired" | "not_authenticated"
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [CrossSpawnSpawner.node, McpAuth.node, EventV2Bridge.node, Config.node, McpBrowser.node],
+  deps: [
+    CrossSpawnSpawner.node,
+    McpAuth.node,
+    EventV2Bridge.node,
+    Config.node,
+    McpBrowser.node,
+    FSUtil.node,
+    EffectFlock.node,
+  ],
 })
 
 export * as MCP from "."
