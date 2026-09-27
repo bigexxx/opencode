@@ -28,6 +28,10 @@ function writeOsc52(text: string) {
 }
 
 export async function read() {
+  const { default: clipboardy } = await import("clipboardy")
+  const text = await clipboardy.read().catch(() => undefined)
+  const filePath = await readPath(text)
+  if (filePath) return { data: filePath, mime: "text/plain" }
   if (platform() === "darwin") {
     const file = path.join(tmpdir(), "opencode-clipboard.png")
     try {
@@ -69,9 +73,37 @@ export async function read() {
     if (x11.length) return { data: x11.toString("base64"), mime: "image/png" }
   }
 
-  const { default: clipboardy } = await import("clipboardy")
-  const text = await clipboardy.read().catch(() => undefined)
   if (text) return { data: text, mime: "text/plain" }
+}
+
+export async function readPath(text?: string) {
+  const { default: clipboardy } = await import("clipboardy")
+  const plain = text ?? (await clipboardy.read().catch(() => undefined))
+  if (plain && plain.split(/\r?\n/).every((line) => /^(?:\/|~\/|[a-zA-Z]:[\\/]|\\\\|file:\/\/)/.test(line))) {
+    return plain
+  }
+  if (platform() !== "darwin") return
+  const files = await readMacFilePaths()
+  if (files.length) return files.join("\n")
+}
+
+export async function readMacFilePaths(name?: string) {
+  const script = `ObjC.import("AppKit")
+function run(argv) {
+  const board = argv.length ? $.NSPasteboard.pasteboardWithName($(argv[0])) : $.NSPasteboard.generalPasteboard
+  const items = board.pasteboardItems
+  const paths = []
+  for (let i = 0; i < items.count; i++) {
+    const value = items.objectAtIndex(i).stringForType($.NSPasteboardTypeFileURL)
+    if (!value) continue
+    const url = $.NSURL.URLWithString(value)
+    if (url && url.isFileURL) paths.push(ObjC.unwrap(url.path))
+  }
+  return JSON.stringify(paths)
+}`
+  return exec("osascript", ["-l", "JavaScript", "-e", script, ...(name ? [name] : [])])
+    .then(({ stdout }) => JSON.parse(stdout.trim()) as string[])
+    .catch(() => [])
 }
 
 export function copyCommand(

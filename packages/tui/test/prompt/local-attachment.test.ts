@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { readLocalAttachmentWith } from "../../src/component/prompt/local-attachment"
+import { pastedAttachmentPath, readLocalAttachmentWith } from "../../src/component/prompt/local-attachment"
 import type { LocalFiles } from "../../src/component/prompt/local-attachment"
 
 function files(input: { mime: string; text?: string; bytes?: Uint8Array }): LocalFiles {
@@ -11,6 +11,16 @@ function files(input: { mime: string; text?: string; bytes?: Uint8Array }): Loca
 }
 
 describe("prompt local attachments", () => {
+  test("keeps copied paths as text but attaches paths dragged into the terminal", () => {
+    const screenshot = "/private/var/folders/temporary/Screenshot 2026-09-24.png"
+    expect(pastedAttachmentPath(screenshot, screenshot, "darwin")).toBeUndefined()
+    expect(pastedAttachmentPath(screenshot.replaceAll(" ", "\\ "), screenshot, "darwin")).toBeUndefined()
+    expect(pastedAttachmentPath(screenshot, "/Users/example/other.png", "darwin")).toBe(screenshot)
+    expect(pastedAttachmentPath(screenshot, undefined, "darwin")).toBe(screenshot)
+    expect(pastedAttachmentPath("file:///tmp/image%20one.png", "/tmp/image one.png", "darwin")).toBeUndefined()
+    expect(pastedAttachmentPath("C:\\Temp\\image.png", "C:\\Temp\\image.png", "win32")).toBeUndefined()
+  })
+
   test("reads SVG attachments as text", async () => {
     expect(await readLocalAttachmentWith(files({ mime: "image/svg+xml", text: "<svg />" }), "/tmp/image.svg")).toEqual({
       type: "text",

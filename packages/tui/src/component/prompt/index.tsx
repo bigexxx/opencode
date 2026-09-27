@@ -12,7 +12,6 @@ import type { CommandContext } from "@opentui/keymap"
 import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
 import { registerOpencodeSpinner } from "../register-spinner"
 import path from "path"
-import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { tint, useTheme } from "../../context/theme"
@@ -55,7 +54,7 @@ import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, u
 import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
-import { readLocalAttachment } from "./local-attachment"
+import { pastedAttachmentPath, readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
 
 registerOpencodeSpinner()
@@ -73,17 +72,6 @@ export type PromptProps = {
     normal?: string[]
     shell?: string[]
   }
-}
-
-function pastedFilepath(value: string, platform: string) {
-  const raw = value.replace(/^['"]+|['"]+$/g, "")
-  if (raw.startsWith("file://")) {
-    try {
-      return fileURLToPath(raw)
-    } catch {}
-  }
-  if (platform === "win32") return raw
-  return raw.replace(/\\(.)/g, "$1")
 }
 
 export type PromptRef = {
@@ -1189,16 +1177,14 @@ export function Prompt(props: PromptProps) {
     )
   }
 
-  async function pasteInputText(text: string) {
+  async function pasteInputText(text: string, filepath?: string) {
     const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
     const pastedContent = normalizedText.trim()
-    const filepath = pastedFilepath(pastedContent, terminalEnvironment.platform)
-    const isUrl = /^(https?):\/\//.test(filepath)
-    if (!isUrl) {
+    if (filepath) {
       const attachment = await readLocalAttachment(filepath)
       const filename = path.basename(filepath)
       if (attachment?.type === "text") {
-        pasteText(attachment.content, `[SVG: ${filename ?? "image"}]`)
+        pasteText(attachment.content, `[SVG: ${filename}]`)
         return
       }
       if (attachment?.type === "binary") {
@@ -1214,7 +1200,7 @@ export function Prompt(props: PromptProps) {
 
     const lineCount = (pastedContent.match(/\n/g)?.length ?? 0) + 1
     if (
-      (lineCount >= 3 || pastedContent.length > 150) &&
+      (lineCount >= 6 || pastedContent.length > 300) &&
       kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary)
     ) {
       pasteText(pastedContent, `[Pasted ~${lineCount} lines]`)
@@ -1425,7 +1411,13 @@ export function Prompt(props: PromptProps) {
                 // default paste unless we suppress it first and handle insertion ourselves.
                 event.preventDefault()
 
-                await pasteInputText(normalizedText)
+                const file = pastedAttachmentPath(pastedContent, undefined, terminalEnvironment.platform)
+                await pasteInputText(
+                  normalizedText,
+                  file
+                    ? pastedAttachmentPath(pastedContent, await clipboard.readPath?.(), terminalEnvironment.platform)
+                    : undefined,
+                )
               }}
               ref={(r: TextareaRenderable) => {
                 input = r

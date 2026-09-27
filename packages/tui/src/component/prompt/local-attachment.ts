@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 export type LocalFiles = Readonly<{
   readText(path: string): Promise<string>
@@ -10,6 +11,23 @@ export type LocalFiles = Readonly<{
 export type LocalAttachment =
   | Readonly<{ type: "text"; mime: "image/svg+xml"; content: string }>
   | Readonly<{ type: "binary"; mime: string; content: Uint8Array }>
+
+export function pastedAttachmentPath(text: string, clipboardPath: string | undefined, platform: string) {
+  const normalize = (value: string) => {
+    const raw = value.replace(/^['"]+|['"]+$/g, "")
+    if (raw.startsWith("file://")) {
+      try {
+        return fileURLToPath(raw)
+      } catch {}
+    }
+    if (platform === "win32") return raw
+    return raw.replace(/\\(.)/g, "$1")
+  }
+  const filepath = normalize(text.trim())
+  const absolute = platform === "win32" ? path.win32.isAbsolute(filepath) : path.posix.isAbsolute(filepath)
+  if (!absolute || filepath === normalize(clipboardPath?.trim() ?? "")) return
+  return filepath
+}
 
 export function readLocalAttachment(file: string) {
   return readLocalAttachmentWith(
